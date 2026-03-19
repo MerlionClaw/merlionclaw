@@ -88,6 +88,30 @@ fn default_memory_dir() -> String {
 struct ChannelsConfig {
     #[serde(default)]
     telegram: TelegramChannelConfig,
+    #[serde(default)]
+    slack: SlackChannelConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct SlackChannelConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_slack_app_token_env")]
+    app_token_env: String,
+    #[serde(default = "default_slack_bot_token_env")]
+    bot_token_env: String,
+    #[serde(default)]
+    allow_from: Vec<String>,
+    #[serde(default)]
+    require_mention: bool,
+}
+
+fn default_slack_app_token_env() -> String {
+    "SLACK_APP_TOKEN".to_string()
+}
+
+fn default_slack_bot_token_env() -> String {
+    "SLACK_BOT_TOKEN".to_string()
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -339,6 +363,43 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
+            // Start Slack adapter if enabled
+            let slack_handle = if config.channels.slack.enabled {
+                let app_token = std::env::var(&config.channels.slack.app_token_env).map_err(
+                    |_| anyhow::anyhow!("{} not set", config.channels.slack.app_token_env),
+                )?;
+                let bot_token = std::env::var(&config.channels.slack.bot_token_env).map_err(
+                    |_| anyhow::anyhow!("{} not set", config.channels.slack.bot_token_env),
+                )?;
+
+                let slack_config = mclaw_channels::slack::SlackConfig {
+                    app_token,
+                    bot_token,
+                    allow_from: config.channels.slack.allow_from.clone(),
+                    require_mention: config.channels.slack.require_mention,
+                };
+
+                let adapter = mclaw_channels::slack::SlackAdapter::new(slack_config);
+                let gateway_url =
+                    format!("ws://{}:{}", config.gateway.host, config.gateway.port);
+                let shutdown_clone = shutdown.clone();
+
+                Some(tokio::spawn(async move {
+                    if let Err(e) = mclaw_channels::traits::ChannelAdapter::start(
+                        &adapter,
+                        gateway_url,
+                        shutdown_clone,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %e, "Slack adapter error");
+                    }
+                }))
+            } else {
+                info!("Slack adapter disabled");
+                None
+            };
+
             // Wait for shutdown signal
             let shutdown_clone = shutdown.clone();
             tokio::spawn(async move {
@@ -356,6 +417,9 @@ async fn main() -> anyhow::Result<()> {
             }
 
             if let Some(handle) = telegram_handle {
+                handle.abort();
+            }
+            if let Some(handle) = slack_handle {
                 handle.abort();
             }
         }

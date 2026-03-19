@@ -7,3 +7,6 @@ pub mod traits;
 
 #[cfg(feature = "telegram")]
 pub mod telegram;
+
+#[cfg(feature = "slack")]
+pub mod slack;

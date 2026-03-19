@@ -1792,6 +1792,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "mclaw-gateway",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "teloxide",
