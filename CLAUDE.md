@@ -15,7 +15,7 @@ MerlionClaw is an **Infrastructure Agent Runtime** written in Rust. It is a pers
 ## Architecture
 
 ```
-User (Telegram/Slack/CLI/WebChat)
+User (Telegram/Slack/Discord/WhatsApp/Teams/CLI)
        │
        ▼
 ┌─────────────────────────┐
@@ -99,32 +99,54 @@ merlionclaw/
 │       ├── lib.rs
 │       ├── traits.rs          # Channel trait: send/receive/format
 │       ├── telegram.rs        # teloxide-based Telegram bot
-│       └── slack.rs           # Slack Socket Mode / Events API
+│       ├── slack.rs           # Slack Socket Mode
+│       ├── discord.rs         # Discord bot (serenity)
+│       ├── whatsapp.rs        # WhatsApp Cloud API
+│       └── teams.rs           # Microsoft Teams Bot Framework
 │
 ├── mclaw-memory/              # Persistent memory system
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs
-│       ├── store.rs           # Markdown file-based storage
-│       ├── search.rs          # tantivy full-text search
-│       └── diary.rs           # daily diary + long-term facts
+│       ├── store.rs           # Markdown file-based storage (facts, diary, context)
+│       └── search.rs          # tantivy full-text search index
 │
 ├── mclaw-permissions/         # Capability-based permission engine
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs
-│       ├── capability.rs      # Permission enum: Fs, Net, K8s, Exec, Helm, etc.
-│       ├── policy.rs          # Policy evaluation: skill declares needs, engine grants/denies
-│       └── config.rs          # per-skill permission config
+│       ├── capability.rs      # Capability type: "domain:action" with wildcards
+│       └── policy.rs          # Policy evaluation: deny/allow/require_approval
+│
+├── mclaw-wasm/                # WASM skill runtime
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs
+│       └── runtime.rs         # wasmtime + WASI sandbox, epoch-based timeouts
+│
+├── mclaw-mcp/                 # MCP client bridge
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs
+│       ├── protocol.rs        # JSON-RPC 2.0 types
+│       ├── transport.rs       # stdio + SSE transports
+│       ├── client.rs          # MCP session management
+│       ├── bridge.rs          # ToolDispatcher wrapper
+│       └── manager.rs         # Multi-server lifecycle
 │
 ├── skills/                    # SKILL.md files (user-facing skill definitions)
 │   ├── k8s/SKILL.md
 │   ├── helm/SKILL.md
 │   ├── istio/SKILL.md
-│   └── loki/SKILL.md
+│   ├── loki/SKILL.md
+│   ├── memory/SKILL.md
+│   └── incident/SKILL.md
 │
 ├── config/
 │   └── default.toml           # default config template
+│
+├── docs/
+│   └── CHAT-PLATFORMS-ROADMAP.md
 │
 └── tests/
     ├── integration/
@@ -221,6 +243,8 @@ The permission engine checks these against the user's policy config before allow
 
 ## Config Format (TOML)
 
+See `config/default.toml` for the full template with all options.
+
 ```toml
 [gateway]
 host = "127.0.0.1"
@@ -232,18 +256,22 @@ default_model = "claude-sonnet-4-20250514"
 [agent.providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
 
-[agent.providers.openai]
-api_key_env = "OPENAI_API_KEY"
-
 [channels.telegram]
 enabled = true
 bot_token_env = "TELEGRAM_BOT_TOKEN"
-allow_from = ["+6512345678"]
+allow_from = []
 
 [channels.slack]
 enabled = false
-app_token_env = "SLACK_APP_TOKEN"
-bot_token_env = "SLACK_BOT_TOKEN"
+
+[channels.discord]
+enabled = false
+
+[channels.whatsapp]
+enabled = false
+
+[channels.teams]
+enabled = false
 
 [permissions.default]
 policy = "deny"
@@ -272,7 +300,7 @@ cargo run -- doctor                 # check config + connectivity
 
 # Release (single static binary)
 cargo build --release
-# Binary at: target/release/mclaw (~15MB)
+# Binary at: target/release/mclaw (~19MB stripped)
 
 # Docker
 docker build -t merlionclaw .
@@ -284,22 +312,24 @@ COPY target/release/mclaw /mclaw
 ENTRYPOINT ["/mclaw", "run", "--sidecar"]
 ```
 
-## Implementation Priority
+## Implementation Status
 
-Work on tasks in this order. Each task has its own file in `tasks/`.
+All 13 core tasks are complete. Task files are in `tasks/` for reference.
 
-1. **TASK-001**: Workspace scaffold + CLI skeleton
-2. **TASK-002**: Gateway core (axum WS server + typed protocol)
-3. **TASK-003**: LLM abstraction layer (Anthropic client + streaming)
-4. **TASK-004**: Skill engine v1 (SKILL.md parser + tool dispatch)
-5. **TASK-005**: Telegram channel adapter
-6. **TASK-006**: End-to-end MVP (Telegram → Gateway → Agent → K8s skill → response)
-7. **TASK-007**: Memory system
-8. **TASK-008**: Permission engine
-9. **TASK-009**: Helm + Istio + Loki skills
-10. **TASK-010**: Slack adapter
-11. **TASK-011**: Incident response skill
-12. **TASK-012**: WASM skill runtime
-13. **TASK-013**: MCP bridge
+1. ~~TASK-001~~: Workspace scaffold + CLI skeleton ✅
+2. ~~TASK-002~~: Gateway core (axum WS server + typed protocol) ✅
+3. ~~TASK-003~~: LLM abstraction layer (Anthropic client + streaming) ✅
+4. ~~TASK-004~~: Skill engine v1 (SKILL.md parser + tool dispatch) ✅
+5. ~~TASK-005~~: Telegram channel adapter ✅
+6. ~~TASK-006~~: End-to-end MVP ✅
+7. ~~TASK-007~~: Memory system (tantivy) ✅
+8. ~~TASK-008~~: Permission engine ✅
+9. ~~TASK-009~~: Helm + Istio + Loki skills ✅
+10. ~~TASK-010~~: Slack adapter ✅
+11. ~~TASK-011~~: Incident response skill ✅
+12. ~~TASK-012~~: WASM skill runtime (wasmtime) ✅
+13. ~~TASK-013~~: MCP bridge ✅
 
-Always read the relevant task file before starting work. Run `cargo check` and `cargo clippy` after each change. Run `cargo test` before committing.
+Additional: Discord, WhatsApp, and Microsoft Teams adapters ✅
+
+Run `cargo check` and `cargo clippy` after each change. Run `cargo test` before committing.

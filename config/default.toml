@@ -1,6 +1,10 @@
+# MerlionClaw Configuration
+# Copy to ~/.merlionclaw/config.toml and customize
+
 [gateway]
 host = "127.0.0.1"
 port = 18789
+session_timeout_secs = 86400  # 24 hours
 
 [agent]
 default_model = "claude-sonnet-4-20250514"
@@ -11,26 +15,86 @@ api_key_env = "ANTHROPIC_API_KEY"
 [agent.providers.openai]
 api_key_env = "OPENAI_API_KEY"
 
+# --- Chat Platforms ---
+# Enable the platforms you want to use.
+# Each requires its own bot token / credentials.
+
 [channels.telegram]
-enabled = true
+enabled = false
 bot_token_env = "TELEGRAM_BOT_TOKEN"
-allow_from = ["+6512345678"]
+allow_from = []  # user IDs or usernames, empty = allow all
 
 [channels.slack]
 enabled = false
-app_token_env = "SLACK_APP_TOKEN"
-bot_token_env = "SLACK_BOT_TOKEN"
+app_token_env = "SLACK_APP_TOKEN"      # xapp-... for Socket Mode
+bot_token_env = "SLACK_BOT_TOKEN"      # xoxb-... for API calls
+allow_from = []
+require_mention = true
+
+[channels.discord]
+enabled = false
+bot_token_env = "DISCORD_BOT_TOKEN"
+allow_from = []
+require_mention = true  # in servers, only respond when @mentioned
+
+[channels.whatsapp]
+enabled = false
+access_token_env = "WHATSAPP_ACCESS_TOKEN"
+phone_number_id = ""         # from Meta Business
+verify_token = "merlionclaw_verify"
+allow_from = []              # phone numbers
+
+[channels.teams]
+enabled = false
+app_id_env = "TEAMS_APP_ID"
+app_password_env = "TEAMS_APP_PASSWORD"
+allow_from = []              # AAD object IDs
+
+# --- Permissions ---
+# Default policy: "deny" (recommended) or "allow"
+# Each skill can have allow, require_approval, and deny lists
 
 [permissions.default]
 policy = "deny"
 
 [permissions.skills.k8s]
 allow = ["k8s:read", "k8s:write"]
+require_approval = ["k8s:write"]
 
 [permissions.skills.helm]
 allow = ["k8s:read", "exec:helm"]
 require_approval = ["exec:helm"]
 
+[permissions.skills.istio]
+allow = ["k8s:read", "k8s:write"]
+
+[permissions.skills.loki]
+allow = ["net:grafana"]
+
+[permissions.skills.incident]
+allow = ["net:alerting", "k8s:read"]
+
+[permissions.skills.memory]
+allow = ["memory:*"]
+
+# --- Memory ---
+
 [memory]
 dir = "~/.merlionclaw/memory"
 diary_enabled = true
+
+# --- MCP Servers (optional) ---
+# Connect to external MCP servers for additional tools
+
+# [[mcp.servers]]
+# name = "github"
+# transport = "stdio"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-github"]
+# env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}" }
+
+# [[mcp.servers]]
+# name = "sentry"
+# transport = "sse"
+# url = "https://mcp.sentry.dev/sse"
+# env = { SENTRY_AUTH_TOKEN = "${SENTRY_TOKEN}" }
