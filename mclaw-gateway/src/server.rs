@@ -85,6 +85,7 @@ pub async fn start_with_handler(
         .route("/webhook/pagerduty", post(pagerduty_webhook))
         .route("/webhook/whatsapp", get(whatsapp_verify))
         .route("/webhook/whatsapp", post(whatsapp_webhook))
+        .route("/webhook/teams", post(teams_webhook))
         .with_state(state);
 
     let addr = SocketAddr::from((config.host, config.port));
@@ -323,6 +324,43 @@ fn parse_whatsapp_messages(payload: &serde_json::Value) -> Vec<(String, String)>
     }
 
     messages
+}
+
+/// Handle Microsoft Teams Bot Framework webhook (POST).
+async fn teams_webhook(
+    State(state): State<AppState>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    // Parse Bot Framework activity
+    let activity_type = payload["type"].as_str().unwrap_or("");
+    if activity_type != "message" {
+        // Acknowledge non-message activities (conversationUpdate, etc.)
+        return axum::Json(serde_json::json!({"status": "ok"}));
+    }
+
+    let text = payload["text"].as_str().unwrap_or("").to_string();
+    let user_id = payload["from"]["id"].as_str().unwrap_or("").to_string();
+
+    // Strip bot @mention
+    let clean_text = text
+        .split("</at>")
+        .last()
+        .unwrap_or(&text)
+        .trim()
+        .to_string();
+
+    if !clean_text.is_empty() && !user_id.is_empty() {
+        info!(user = %user_id, "received Teams message");
+
+        if let Some(handler) = &state.handler {
+            let session_id = format!("teams:{user_id}");
+            handler
+                .handle(session_id, user_id, clean_text, vec![])
+                .await;
+        }
+    }
+
+    axum::Json(serde_json::json!({"status": "ok"}))
 }
 
 /// Health check endpoint.

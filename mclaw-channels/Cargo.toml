@@ -6,11 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["telegram", "slack", "discord", "whatsapp"]
+default = ["telegram", "slack", "discord", "whatsapp", "teams"]
 telegram = ["teloxide"]
 slack = ["reqwest"]
 discord = ["serenity"]
 whatsapp = ["reqwest"]
+teams = ["reqwest"]
 
 [dependencies]
 mclaw-gateway = { path = "../mclaw-gateway" }

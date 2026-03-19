@@ -94,6 +94,28 @@ struct ChannelsConfig {
     discord: DiscordChannelConfig,
     #[serde(default)]
     whatsapp: WhatsAppChannelConfig,
+    #[serde(default)]
+    teams: TeamsChannelConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct TeamsChannelConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_teams_app_id_env")]
+    app_id_env: String,
+    #[serde(default = "default_teams_app_password_env")]
+    app_password_env: String,
+    #[serde(default)]
+    allow_from: Vec<String>,
+}
+
+fn default_teams_app_id_env() -> String {
+    "TEAMS_APP_ID".to_string()
+}
+
+fn default_teams_app_password_env() -> String {
+    "TEAMS_APP_PASSWORD".to_string()
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -496,6 +518,43 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
+            // Start Teams adapter if enabled
+            let teams_handle = if config.channels.teams.enabled {
+                let app_id = std::env::var(&config.channels.teams.app_id_env).map_err(|_| {
+                    anyhow::anyhow!("{} not set", config.channels.teams.app_id_env)
+                })?;
+                let app_password =
+                    std::env::var(&config.channels.teams.app_password_env).map_err(|_| {
+                        anyhow::anyhow!("{} not set", config.channels.teams.app_password_env)
+                    })?;
+
+                let teams_config = mclaw_channels::teams::TeamsConfig {
+                    app_id,
+                    app_password,
+                    allow_from: config.channels.teams.allow_from.clone(),
+                };
+
+                let adapter = mclaw_channels::teams::TeamsAdapter::new(teams_config);
+                let gateway_url =
+                    format!("ws://{}:{}", config.gateway.host, config.gateway.port);
+                let shutdown_clone = shutdown.clone();
+
+                Some(tokio::spawn(async move {
+                    if let Err(e) = mclaw_channels::traits::ChannelAdapter::start(
+                        &adapter,
+                        gateway_url,
+                        shutdown_clone,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %e, "Teams adapter error");
+                    }
+                }))
+            } else {
+                info!("Teams adapter disabled");
+                None
+            };
+
             // Start Discord adapter if enabled
             let discord_handle = if config.channels.discord.enabled {
                 let bot_token = std::env::var(&config.channels.discord.bot_token_env).map_err(
@@ -555,6 +614,9 @@ async fn main() -> anyhow::Result<()> {
                 handle.abort();
             }
             if let Some(handle) = whatsapp_handle {
+                handle.abort();
+            }
+            if let Some(handle) = teams_handle {
                 handle.abort();
             }
         }

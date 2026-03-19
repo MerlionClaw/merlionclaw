@@ -16,3 +16,6 @@ pub mod discord;
 
 #[cfg(feature = "whatsapp")]
 pub mod whatsapp;
+
+#[cfg(feature = "teams")]
+pub mod teams;
