@@ -60,7 +60,9 @@ async fn main() -> anyhow::Result<()> {
                 info!("starting gateway and agent");
             }
             info!(config = %cli.config, "loading config");
-            // TODO: start gateway + agent loop
+
+            let gateway_config = mclaw_gateway::config::GatewayConfig::default();
+            mclaw_gateway::server::start(gateway_config).await?;
         }
         Commands::Onboard => {
             info!("starting onboard wizard");
