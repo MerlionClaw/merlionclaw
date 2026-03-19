@@ -1,0 +1,36 @@
+[gateway]
+host = "127.0.0.1"
+port = 18789
+
+[agent]
+default_model = "claude-sonnet-4-20250514"
+
+[agent.providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+
+[agent.providers.openai]
+api_key_env = "OPENAI_API_KEY"
+
+[channels.telegram]
+enabled = true
+bot_token_env = "TELEGRAM_BOT_TOKEN"
+allow_from = ["+6512345678"]
+
+[channels.slack]
+enabled = false
+app_token_env = "SLACK_APP_TOKEN"
+bot_token_env = "SLACK_BOT_TOKEN"
+
+[permissions.default]
+policy = "deny"
+
+[permissions.skills.k8s]
+allow = ["k8s:read", "k8s:write"]
+
+[permissions.skills.helm]
+allow = ["k8s:read", "exec:helm"]
+require_approval = ["exec:helm"]
+
+[memory]
+dir = "~/.merlionclaw/memory"
+diary_enabled = true
