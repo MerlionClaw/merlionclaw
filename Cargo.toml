@@ -8,6 +8,7 @@ members = [
     "mclaw-channels",
     "mclaw-memory",
     "mclaw-permissions",
+    "mclaw-wasm",
 ]
 
 [workspace.package]
