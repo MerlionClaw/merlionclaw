@@ -9,6 +9,7 @@ members = [
     "mclaw-memory",
     "mclaw-permissions",
     "mclaw-wasm",
+    "mclaw-mcp",
 ]
 
 [workspace.package]

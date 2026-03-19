@@ -2246,6 +2246,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mclaw-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "mclaw-agent",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mclaw-memory"
 version = "0.1.0"
 dependencies = [
