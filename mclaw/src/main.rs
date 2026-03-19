@@ -58,6 +58,30 @@ struct AppConfig {
     channels: ChannelsConfig,
     #[serde(default)]
     agent: AgentConfig,
+    #[serde(default)]
+    memory: MemoryConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)]
+struct MemoryConfig {
+    #[serde(default = "default_memory_dir")]
+    dir: String,
+    #[serde(default)]
+    diary_enabled: bool,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_memory_dir(),
+            diary_enabled: true,
+        }
+    }
+}
+
+fn default_memory_dir() -> String {
+    "~/.merlionclaw/memory".to_string()
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -222,6 +246,15 @@ async fn main() -> anyhow::Result<()> {
                     tracing::warn!(error = %e, "K8s skill not available (no cluster connection)");
                 }
             }
+
+            // Initialize memory store
+            let memory_dir = shellexpand::tilde(&config.memory.dir).to_string();
+            let memory_store = std::sync::Arc::new(
+                mclaw_memory::store::MemoryStore::new(std::path::PathBuf::from(&memory_dir)).await?,
+            );
+            let memory_skill = mclaw_skills::memory::MemorySkill::new(memory_store);
+            registry.register_handler("memory", Box::new(memory_skill));
+            info!(dir = %memory_dir, "memory system initialized");
 
             // Create agent
             let agent = mclaw_agent::agent::Agent::new(

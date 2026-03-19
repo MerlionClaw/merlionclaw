@@ -8,3 +8,4 @@ pub mod registry;
 
 #[cfg(feature = "k8s")]
 pub mod k8s;
+pub mod memory;
