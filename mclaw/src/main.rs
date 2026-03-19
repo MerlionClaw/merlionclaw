@@ -295,6 +295,11 @@ async fn main() -> anyhow::Result<()> {
 
             // Note: Loki skill requires config (loki_url) — registered when config is present
 
+            // Register incident skill
+            let incident_skill = mclaw_skills::incident::IncidentSkill::new();
+            registry.register_handler("incident", Box::new(incident_skill));
+            info!("Incident skill handler registered");
+
             // Initialize memory store
             let memory_dir = shellexpand::tilde(&config.memory.dir).to_string();
             let memory_store = std::sync::Arc::new(

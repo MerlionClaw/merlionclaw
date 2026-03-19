@@ -3,7 +3,7 @@
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -80,6 +80,8 @@ pub async fn start_with_handler(
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/health", get(health_handler))
+        .route("/webhook/alertmanager", post(alertmanager_webhook))
+        .route("/webhook/pagerduty", post(pagerduty_webhook))
         .with_state(state);
 
     let addr = SocketAddr::from((config.host, config.port));
@@ -203,6 +205,48 @@ async fn handle_text_message(text: &str, state: &AppState) -> OutboundMessage {
             }
         }
     }
+}
+
+/// Handle Alertmanager webhook.
+async fn alertmanager_webhook(
+    State(state): State<AppState>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let alerts = crate::alert::parse_alertmanager(&payload);
+    info!(count = alerts.len(), "received Alertmanager webhook");
+
+    if let Some(handler) = &state.handler {
+        for alert in &alerts {
+            let content = crate::alert::format_alert(alert);
+            let session_id = format!("alert:{}", alert.id);
+            handler
+                .handle(session_id, "alertmanager".to_string(), content, vec![])
+                .await;
+        }
+    }
+
+    axum::Json(serde_json::json!({"status": "ok", "alerts_received": alerts.len()}))
+}
+
+/// Handle PagerDuty webhook.
+async fn pagerduty_webhook(
+    State(state): State<AppState>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let alerts = crate::alert::parse_pagerduty(&payload);
+    info!(count = alerts.len(), "received PagerDuty webhook");
+
+    if let Some(handler) = &state.handler {
+        for alert in &alerts {
+            let content = crate::alert::format_alert(alert);
+            let session_id = format!("alert:{}", alert.id);
+            handler
+                .handle(session_id, "pagerduty".to_string(), content, vec![])
+                .await;
+        }
+    }
+
+    axum::Json(serde_json::json!({"status": "ok", "alerts_received": alerts.len()}))
 }
 
 /// Health check endpoint.

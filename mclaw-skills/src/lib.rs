@@ -12,5 +12,6 @@ pub mod k8s;
 pub mod istio;
 
 pub mod helm;
+pub mod incident;
 pub mod loki;
 pub mod memory;
