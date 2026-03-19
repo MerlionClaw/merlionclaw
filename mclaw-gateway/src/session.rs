@@ -84,6 +84,14 @@ impl SessionManager {
         }
     }
 
+    /// Clear the conversation history for a session.
+    pub async fn clear_history(&self, key: &str) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(key) {
+            session.history.clear();
+        }
+    }
+
     /// Return the number of active (non-expired) sessions.
     pub async fn active_count(&self) -> usize {
         let sessions = self.sessions.read().await;

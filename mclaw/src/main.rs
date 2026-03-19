@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use clap::{Parser, Subcommand};
 use tracing::info;
 
@@ -54,6 +56,8 @@ struct AppConfig {
     gateway: mclaw_gateway::config::GatewayConfig,
     #[serde(default)]
     channels: ChannelsConfig,
+    #[serde(default)]
+    agent: AgentConfig,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -72,10 +76,54 @@ struct TelegramChannelConfig {
     allow_from: Vec<String>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct AgentConfig {
+    #[serde(default = "default_model")]
+    default_model: String,
+    #[serde(default)]
+    providers: ProvidersConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ProvidersConfig {
+    #[serde(default)]
+    anthropic: ProviderConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ProviderConfig {
+    #[serde(default = "default_anthropic_key_env")]
+    api_key_env: String,
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: default_anthropic_key_env(),
+        }
+    }
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            default_model: default_model(),
+            providers: ProvidersConfig::default(),
+        }
+    }
+}
+
 fn default_telegram_token_env() -> String {
     "TELEGRAM_BOT_TOKEN".to_string()
 }
 
+fn default_model() -> String {
+    "claude-sonnet-4-20250514".to_string()
+}
+
+fn default_anthropic_key_env() -> String {
+    "ANTHROPIC_API_KEY".to_string()
+}
 
 fn load_config(path: &str) -> AppConfig {
     let expanded = shellexpand::tilde(path).to_string();
@@ -97,6 +145,49 @@ fn load_config(path: &str) -> AppConfig {
     }
 }
 
+/// Bridge between the agent and the gateway's MessageHandler trait.
+struct AgentHandler {
+    agent: mclaw_agent::agent::Agent,
+}
+
+#[async_trait::async_trait]
+impl mclaw_gateway::server::MessageHandler for AgentHandler {
+    async fn handle(
+        &self,
+        session_id: String,
+        sender: String,
+        content: String,
+        _history: Vec<String>,
+    ) -> mclaw_gateway::server::HandlerResponse {
+        let chat = mclaw_agent::agent::InboundChat {
+            session_id,
+            sender,
+            content,
+            history: vec![], // Context managed by the agent in future
+        };
+
+        match self.agent.handle_message(chat).await {
+            mclaw_agent::agent::AgentResponse::Reply {
+                session_id,
+                content,
+            } => mclaw_gateway::server::HandlerResponse::Reply {
+                session_id,
+                content,
+            },
+            mclaw_agent::agent::AgentResponse::Error {
+                session_id,
+                message,
+            } => mclaw_gateway::server::HandlerResponse::Error {
+                session_id,
+                message,
+            },
+            mclaw_agent::agent::AgentResponse::ContextCleared { session_id } => {
+                mclaw_gateway::server::HandlerResponse::ContextCleared { session_id }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -111,12 +202,47 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let config = load_config(&cli.config);
+
+            // Create LLM provider
+            let provider = mclaw_agent::llm::anthropic::AnthropicProvider::from_env(
+                &config.agent.providers.anthropic.api_key_env,
+            )?;
+
+            // Discover skills
+            let skills_dir = std::path::Path::new("skills");
+            let mut registry = mclaw_skills::registry::SkillRegistry::discover(skills_dir)?;
+
+            // Register K8s skill handler if available
+            match mclaw_skills::k8s::K8sSkill::new().await {
+                Ok(k8s) => {
+                    registry.register_handler("k8s", Box::new(k8s));
+                    info!("K8s skill handler registered");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "K8s skill not available (no cluster connection)");
+                }
+            }
+
+            // Create agent
+            let agent = mclaw_agent::agent::Agent::new(
+                Box::new(provider),
+                config.agent.default_model.clone(),
+            )
+            .with_dispatcher(Box::new(registry));
+
+            let handler: Arc<dyn mclaw_gateway::server::MessageHandler> =
+                Arc::new(AgentHandler { agent });
+
             let shutdown = tokio_util::sync::CancellationToken::new();
 
-            // Start gateway
+            // Start gateway with agent
             let gateway_config = config.gateway.clone();
+            let handler_clone = handler.clone();
             let gateway_handle = tokio::spawn(async move {
-                if let Err(e) = mclaw_gateway::server::start(gateway_config).await {
+                if let Err(e) =
+                    mclaw_gateway::server::start_with_handler(gateway_config, Some(handler_clone))
+                        .await
+                {
                     tracing::error!(error = %e, "gateway error");
                 }
             });
@@ -126,8 +252,9 @@ async fn main() -> anyhow::Result<()> {
 
             // Start Telegram adapter if enabled
             let telegram_handle = if config.channels.telegram.enabled {
-                let bot_token = std::env::var(&config.channels.telegram.bot_token_env)
-                    .map_err(|_| anyhow::anyhow!("{} not set", config.channels.telegram.bot_token_env))?;
+                let bot_token = std::env::var(&config.channels.telegram.bot_token_env).map_err(
+                    |_| anyhow::anyhow!("{} not set", config.channels.telegram.bot_token_env),
+                )?;
 
                 let telegram_config = mclaw_channels::telegram::TelegramConfig {
                     bot_token,
@@ -135,7 +262,8 @@ async fn main() -> anyhow::Result<()> {
                 };
 
                 let adapter = mclaw_channels::telegram::TelegramAdapter::new(telegram_config);
-                let gateway_url = format!("ws://{}:{}", config.gateway.host, config.gateway.port);
+                let gateway_url =
+                    format!("ws://{}:{}", config.gateway.host, config.gateway.port);
                 let shutdown_clone = shutdown.clone();
 
                 Some(tokio::spawn(async move {
@@ -170,29 +298,104 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // Clean up telegram handle if it exists
             if let Some(handle) = telegram_handle {
                 handle.abort();
             }
         }
         Commands::Onboard => {
             info!("starting onboard wizard");
-            // TODO: guided setup
+            println!("MerlionClaw Setup Wizard");
+            println!("========================");
+            println!();
+            println!("1. Set ANTHROPIC_API_KEY environment variable");
+            println!("2. Set TELEGRAM_BOT_TOKEN environment variable (from @BotFather)");
+            println!("3. Create config at ~/.merlionclaw/config.toml");
+            println!("4. Run: mclaw doctor  (to verify setup)");
+            println!("5. Run: mclaw run     (to start)");
         }
         Commands::Status => {
-            info!("checking status");
-            // TODO: query running instance
+            let config = load_config(&cli.config);
+            let url = format!(
+                "http://{}:{}/health",
+                config.gateway.host, config.gateway.port
+            );
+            match reqwest::get(&url).await {
+                Ok(resp) => {
+                    let body: serde_json::Value = resp.json().await?;
+                    println!("Gateway: running");
+                    println!("Sessions: {}", body["sessions"]);
+                }
+                Err(_) => {
+                    println!("Gateway: not running");
+                }
+            }
         }
         Commands::Doctor => {
-            info!("running diagnostics");
-            let config_path = shellexpand::tilde(&cli.config).to_string();
-            if std::path::Path::new(&config_path).exists() {
-                info!(path = %config_path, "config file found");
-            } else {
-                tracing::warn!(path = %config_path, "config file not found");
-            }
+            let config = load_config(&cli.config);
+            run_doctor(&cli.config, &config).await;
         }
     }
 
     Ok(())
+}
+
+async fn run_doctor(config_path: &str, config: &AppConfig) {
+    println!("MerlionClaw Doctor");
+    println!("==================");
+
+    // Check config
+    let expanded = shellexpand::tilde(config_path).to_string();
+    if std::path::Path::new(&expanded).exists() {
+        println!("  Config file: {expanded}");
+    } else {
+        println!("  Config file: not found ({expanded})");
+    }
+
+    // Check Anthropic API key
+    let api_key_env = &config.agent.providers.anthropic.api_key_env;
+    match std::env::var(api_key_env) {
+        Ok(key) if !key.is_empty() => {
+            println!("  Anthropic API: key set ({api_key_env})");
+        }
+        _ => {
+            println!("  Anthropic API: {api_key_env} not set");
+        }
+    }
+
+    // Check Telegram bot token
+    let bot_token_env = &config.channels.telegram.bot_token_env;
+    if config.channels.telegram.enabled {
+        match std::env::var(bot_token_env) {
+            Ok(token) if !token.is_empty() => {
+                println!("  Telegram bot: token set ({bot_token_env})");
+            }
+            _ => {
+                println!("  Telegram bot: {bot_token_env} not set");
+            }
+        }
+    } else {
+        println!("  Telegram bot: disabled");
+    }
+
+    // Check K8s connectivity
+    match mclaw_skills::k8s::K8sSkill::new().await {
+        Ok(_) => {
+            println!("  Kubernetes: connected");
+        }
+        Err(e) => {
+            println!("  Kubernetes: not available ({e})");
+        }
+    }
+
+    // Check skills directory
+    let skills_dir = std::path::Path::new("skills");
+    match mclaw_skills::registry::SkillRegistry::discover(skills_dir) {
+        Ok(registry) => {
+            let defs = registry.tool_definitions();
+            println!("  Skills: {} tools loaded", defs.len());
+        }
+        Err(e) => {
+            println!("  Skills: error ({e})");
+        }
+    }
 }

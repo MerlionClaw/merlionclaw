@@ -6,6 +6,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
@@ -13,11 +14,36 @@ use crate::config::GatewayConfig;
 use crate::protocol::{InboundMessage, OutboundMessage};
 use crate::session::SessionManager;
 
+/// Trait for processing chat messages (implemented by the Agent).
+#[async_trait::async_trait]
+pub trait MessageHandler: Send + Sync {
+    /// Process a chat message and return a response.
+    async fn handle(
+        &self,
+        session_id: String,
+        sender: String,
+        content: String,
+        history: Vec<String>,
+    ) -> HandlerResponse;
+}
+
+/// Response from a message handler.
+pub enum HandlerResponse {
+    /// A text reply.
+    Reply { session_id: String, content: String },
+    /// An error.
+    Error { session_id: String, message: String },
+    /// Context was cleared.
+    ContextCleared { session_id: String },
+}
+
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
     /// Session manager.
     pub sessions: SessionManager,
+    /// Optional message handler (agent).
+    handler: Option<Arc<dyn MessageHandler>>,
 }
 
 impl AppState {
@@ -25,13 +51,31 @@ impl AppState {
     pub fn new(config: &GatewayConfig) -> Self {
         Self {
             sessions: SessionManager::new(config.session_timeout_secs),
+            handler: None,
         }
+    }
+
+    /// Set the message handler.
+    pub fn with_handler(mut self, handler: Arc<dyn MessageHandler>) -> Self {
+        self.handler = Some(handler);
+        self
     }
 }
 
 /// Start the gateway server.
 pub async fn start(config: GatewayConfig) -> anyhow::Result<()> {
-    let state = AppState::new(&config);
+    start_with_handler(config, None).await
+}
+
+/// Start the gateway server with an optional message handler.
+pub async fn start_with_handler(
+    config: GatewayConfig,
+    handler: Option<Arc<dyn MessageHandler>>,
+) -> anyhow::Result<()> {
+    let mut state = AppState::new(&config);
+    if let Some(h) = handler {
+        state = state.with_handler(h);
+    }
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
@@ -116,12 +160,46 @@ async fn handle_text_message(text: &str, state: &AppState) -> OutboundMessage {
             ..
         } => {
             let session = state.sessions.get_or_create(channel, &sender).await;
-            state.sessions.record_message(&session.key, content).await;
+            state
+                .sessions
+                .record_message(&session.key, content.clone())
+                .await;
 
-            // Agent not yet implemented — return placeholder error
-            OutboundMessage::Error {
-                session_id: Some(session_id),
-                message: "agent not configured".to_string(),
+            match &state.handler {
+                Some(handler) => {
+                    let resp = handler
+                        .handle(session_id, sender, content, session.history)
+                        .await;
+                    match resp {
+                        HandlerResponse::Reply {
+                            session_id,
+                            content,
+                        } => OutboundMessage::Reply {
+                            session_id,
+                            content,
+                            tool_use: None,
+                        },
+                        HandlerResponse::Error {
+                            session_id,
+                            message,
+                        } => OutboundMessage::Error {
+                            session_id: Some(session_id),
+                            message,
+                        },
+                        HandlerResponse::ContextCleared { session_id } => {
+                            state.sessions.clear_history(&session.key).await;
+                            OutboundMessage::Reply {
+                                session_id,
+                                content: "Context cleared.".to_string(),
+                                tool_use: None,
+                            }
+                        }
+                    }
+                }
+                None => OutboundMessage::Error {
+                    session_id: Some(session_id),
+                    message: "agent not configured".to_string(),
+                },
             }
         }
     }
@@ -148,7 +226,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_chat_returns_agent_not_configured() {
+    async fn test_handle_chat_no_handler() {
         let state = AppState::new(&GatewayConfig::default());
         let msg = r#"{"type":"chat","session_id":"test","channel":"cli","sender":"larry","content":"hello"}"#;
         let response = handle_text_message(msg, &state).await;

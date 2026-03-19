@@ -4,4 +4,5 @@
 //! call LLM, execute tool calls, and return responses.
 
 pub mod agent;
+pub mod context;
 pub mod llm;

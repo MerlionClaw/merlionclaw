@@ -158,6 +158,47 @@ impl SkillRegistry {
             .collect::<Vec<_>>()
             .join("\n\n")
     }
+
+    /// Get a human-readable summary of all registered skills.
+    pub fn skills_summary(&self) -> String {
+        if self.skills.is_empty() {
+            return "No skills registered.".to_string();
+        }
+
+        let mut lines = vec!["Registered skills:".to_string()];
+        for skill in self.skills.values() {
+            let m = &skill.parsed.manifest;
+            let tool_names: Vec<&str> = m.tools.iter().map(|t| t.name.as_str()).collect();
+            lines.push(format!(
+                "  {} v{} - {} ({} tools: {})",
+                m.name,
+                m.version,
+                m.description,
+                m.tools.len(),
+                tool_names.join(", ")
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+#[async_trait]
+impl mclaw_agent::agent::ToolDispatcher for SkillRegistry {
+    async fn dispatch(&self, tool_name: &str, input: serde_json::Value) -> anyhow::Result<String> {
+        self.dispatch(tool_name, input).await
+    }
+
+    fn tool_definitions(&self) -> Vec<mclaw_agent::llm::ToolDefinition> {
+        self.tool_definitions()
+    }
+
+    fn system_prompt(&self) -> String {
+        self.system_prompt()
+    }
+
+    fn skills_summary(&self) -> String {
+        self.skills_summary()
+    }
 }
 
 impl Default for SkillRegistry {

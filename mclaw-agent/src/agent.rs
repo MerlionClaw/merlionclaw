@@ -10,6 +10,23 @@ use crate::llm::{
 /// Maximum number of tool call rounds before aborting.
 const MAX_TOOL_ROUNDS: usize = 10;
 
+const BASE_SYSTEM_PROMPT: &str = "\
+You are MerlionClaw, an Infrastructure Agent Runtime.
+You are a DevOps/SRE assistant that helps manage Kubernetes clusters, \
+deployments, and infrastructure.
+
+You have access to the following skills and tools. Use them when the user \
+asks about infrastructure operations.";
+
+const FORMATTING_PROMPT: &str = "\
+When presenting results:
+- Format tables with aligned columns
+- Highlight warnings (CrashLoopBackOff, OOMKilled, high restart counts)
+- Always mention the namespace and cluster context
+- Be concise but include relevant details
+
+If you're unsure about a destructive operation, ask for confirmation first.";
+
 /// Trait for dispatching tool calls (implemented by SkillRegistry).
 #[async_trait::async_trait]
 pub trait ToolDispatcher: Send + Sync {
@@ -21,6 +38,9 @@ pub trait ToolDispatcher: Send + Sync {
 
     /// Get combined system prompt fragment.
     fn system_prompt(&self) -> String;
+
+    /// Get a summary of registered skills for /skills command.
+    fn skills_summary(&self) -> String;
 }
 
 /// The core agent that processes user messages via an LLM.
@@ -51,6 +71,8 @@ pub enum AgentResponse {
     Reply { session_id: String, content: String },
     /// An error occurred.
     Error { session_id: String, message: String },
+    /// Context was cleared.
+    ContextCleared { session_id: String },
 }
 
 impl Agent {
@@ -59,23 +81,73 @@ impl Agent {
         Self {
             provider,
             model,
-            system_prompt: "You are MerlionClaw, an infrastructure agent runtime. \
-                You help with DevOps and SRE tasks including Kubernetes, Helm, \
-                Istio, and observability workflows. Be concise and precise."
-                .to_string(),
+            system_prompt: format!("{BASE_SYSTEM_PROMPT}\n\n{FORMATTING_PROMPT}"),
             dispatcher: None,
         }
     }
 
     /// Set the tool dispatcher (skill registry).
     pub fn with_dispatcher(mut self, dispatcher: Box<dyn ToolDispatcher>) -> Self {
-        // Append skill system prompts
         let skill_prompt = dispatcher.system_prompt();
-        if !skill_prompt.is_empty() {
-            self.system_prompt = format!("{}\n\n{}", self.system_prompt, skill_prompt);
+        if skill_prompt.is_empty() {
+            self.system_prompt = format!("{BASE_SYSTEM_PROMPT}\n\n{FORMATTING_PROMPT}");
+        } else {
+            self.system_prompt =
+                format!("{BASE_SYSTEM_PROMPT}\n\n{skill_prompt}\n\n{FORMATTING_PROMPT}");
         }
         self.dispatcher = Some(dispatcher);
         self
+    }
+
+    /// Get the model name.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Handle a special slash command. Returns Some if handled, None if not a command.
+    fn handle_command(&self, content: &str, session_id: &str) -> Option<AgentResponse> {
+        let trimmed = content.trim();
+
+        match trimmed {
+            "/help" => Some(AgentResponse::Reply {
+                session_id: session_id.to_string(),
+                content: "Available commands:\n\
+                    /help    - Show this help\n\
+                    /status  - Show gateway status\n\
+                    /skills  - List available skills and tools\n\
+                    /reset   - Clear conversation context"
+                    .to_string(),
+            }),
+            "/reset" => Some(AgentResponse::ContextCleared {
+                session_id: session_id.to_string(),
+            }),
+            "/skills" => {
+                let summary = self
+                    .dispatcher
+                    .as_ref()
+                    .map(|d| d.skills_summary())
+                    .unwrap_or_else(|| "No skills registered.".to_string());
+                Some(AgentResponse::Reply {
+                    session_id: session_id.to_string(),
+                    content: summary,
+                })
+            }
+            "/status" => {
+                let skills_count = self
+                    .dispatcher
+                    .as_ref()
+                    .map(|d| d.tool_definitions().len())
+                    .unwrap_or(0);
+                Some(AgentResponse::Reply {
+                    session_id: session_id.to_string(),
+                    content: format!(
+                        "Gateway: running | Model: {} | Tools: {}",
+                        self.model, skills_count
+                    ),
+                })
+            }
+            _ => None,
+        }
     }
 
     /// Process a user message and return a response.
@@ -85,6 +157,11 @@ impl Agent {
             sender = %chat.sender,
             "processing message"
         );
+
+        // Check for slash commands first
+        if let Some(response) = self.handle_command(&chat.content, &chat.session_id) {
+            return response;
+        }
 
         let mut messages = chat.history;
         messages.push(ChatMessage {
@@ -112,7 +189,7 @@ impl Agent {
                 Err(e) => {
                     return AgentResponse::Error {
                         session_id: chat.session_id,
-                        message: format!("LLM error: {e}"),
+                        message: format_llm_error(&e),
                     };
                 }
             };
@@ -126,13 +203,11 @@ impl Agent {
             // If the LLM wants to use tools, execute them and continue
             if response.stop_reason == "tool_use" {
                 if let Some(dispatcher) = &self.dispatcher {
-                    // Add assistant message with the full response
                     messages.push(ChatMessage {
                         role: Role::Assistant,
                         content: MessageContent::Blocks(response.content.clone()),
                     });
 
-                    // Execute each tool call and build tool results
                     let mut tool_results = Vec::new();
                     for block in &response.content {
                         if let ContentBlock::ToolUse { id, name, input } = block {
@@ -147,7 +222,7 @@ impl Agent {
                                     warn!(tool = %name, error = %e, "tool execution failed");
                                     ContentBlock::ToolResult {
                                         tool_use_id: id.clone(),
-                                        content: format!("Error: {e}"),
+                                        content: format_skill_error(name, &e),
                                         is_error: Some(true),
                                     }
                                 }
@@ -156,7 +231,6 @@ impl Agent {
                         }
                     }
 
-                    // Add tool results as a user message
                     messages.push(ChatMessage {
                         role: Role::User,
                         content: MessageContent::Blocks(tool_results),
@@ -187,5 +261,33 @@ impl Agent {
             session_id: chat.session_id,
             message: "max tool call rounds exceeded".to_string(),
         }
+    }
+}
+
+/// Format LLM errors into user-friendly messages.
+fn format_llm_error(error: &anyhow::Error) -> String {
+    let msg = error.to_string();
+    if msg.contains("401") {
+        "Invalid API key. Check ANTHROPIC_API_KEY.".to_string()
+    } else if msg.contains("429") {
+        "Rate limited. Please try again in a moment.".to_string()
+    } else if msg.contains("529") || msg.contains("overloaded") {
+        "The API is overloaded. Please try again shortly.".to_string()
+    } else {
+        format!("LLM error: {msg}")
+    }
+}
+
+/// Format skill execution errors into user-friendly messages.
+fn format_skill_error(tool_name: &str, error: &anyhow::Error) -> String {
+    let msg = error.to_string();
+    if msg.contains("403") || msg.contains("Forbidden") {
+        format!("Permission denied for {tool_name}. Check ServiceAccount RBAC.")
+    } else if msg.contains("connection refused") || msg.contains("Connection refused") {
+        "Cannot connect to Kubernetes API. Is kubeconfig configured?".to_string()
+    } else if msg.contains("not found") {
+        format!("Resource not found: {msg}")
+    } else {
+        format!("Error executing {tool_name}: {msg}")
     }
 }
