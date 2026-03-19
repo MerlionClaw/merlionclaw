@@ -10,3 +10,6 @@ pub mod telegram;
 
 #[cfg(feature = "slack")]
 pub mod slack;
+
+#[cfg(feature = "discord")]
+pub mod discord;

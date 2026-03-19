@@ -60,6 +60,7 @@ pub enum OutboundMessage {
 pub enum ChannelKind {
     Telegram,
     Slack,
+    Discord,
     Cli,
     Webchat,
 }
@@ -69,6 +70,7 @@ impl std::fmt::Display for ChannelKind {
         match self {
             Self::Telegram => write!(f, "telegram"),
             Self::Slack => write!(f, "slack"),
+            Self::Discord => write!(f, "discord"),
             Self::Cli => write!(f, "cli"),
             Self::Webchat => write!(f, "webchat"),
         }

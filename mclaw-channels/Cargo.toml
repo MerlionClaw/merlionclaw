@@ -6,9 +6,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["telegram", "slack"]
+default = ["telegram", "slack", "discord"]
 telegram = ["teloxide"]
 slack = ["reqwest"]
+discord = ["serenity"]
 
 [dependencies]
 mclaw-gateway = { path = "../mclaw-gateway" }
@@ -25,3 +26,4 @@ futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["rt"] }
 teloxide = { version = "0.13", features = ["macros"], optional = true }
 reqwest = { version = "0.12", features = ["json"], optional = true }
+serenity = { version = "0.12", features = ["client", "gateway", "model", "cache"], optional = true }

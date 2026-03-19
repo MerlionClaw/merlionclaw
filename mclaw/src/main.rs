@@ -90,6 +90,28 @@ struct ChannelsConfig {
     telegram: TelegramChannelConfig,
     #[serde(default)]
     slack: SlackChannelConfig,
+    #[serde(default)]
+    discord: DiscordChannelConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct DiscordChannelConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_discord_token_env")]
+    bot_token_env: String,
+    #[serde(default)]
+    allow_from: Vec<String>,
+    #[serde(default = "default_true")]
+    require_mention: bool,
+}
+
+fn default_discord_token_env() -> String {
+    "DISCORD_BOT_TOKEN".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -415,6 +437,39 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
+            // Start Discord adapter if enabled
+            let discord_handle = if config.channels.discord.enabled {
+                let bot_token = std::env::var(&config.channels.discord.bot_token_env).map_err(
+                    |_| anyhow::anyhow!("{} not set", config.channels.discord.bot_token_env),
+                )?;
+
+                let discord_config = mclaw_channels::discord::DiscordConfig {
+                    bot_token,
+                    allow_from: config.channels.discord.allow_from.clone(),
+                    require_mention: config.channels.discord.require_mention,
+                };
+
+                let adapter = mclaw_channels::discord::DiscordAdapter::new(discord_config);
+                let gateway_url =
+                    format!("ws://{}:{}", config.gateway.host, config.gateway.port);
+                let shutdown_clone = shutdown.clone();
+
+                Some(tokio::spawn(async move {
+                    if let Err(e) = mclaw_channels::traits::ChannelAdapter::start(
+                        &adapter,
+                        gateway_url,
+                        shutdown_clone,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %e, "Discord adapter error");
+                    }
+                }))
+            } else {
+                info!("Discord adapter disabled");
+                None
+            };
+
             // Wait for shutdown signal
             let shutdown_clone = shutdown.clone();
             tokio::spawn(async move {
@@ -435,6 +490,9 @@ async fn main() -> anyhow::Result<()> {
                 handle.abort();
             }
             if let Some(handle) = slack_handle {
+                handle.abort();
+            }
+            if let Some(handle) = discord_handle {
                 handle.abort();
             }
         }
