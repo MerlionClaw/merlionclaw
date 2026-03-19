@@ -1,0 +1,28 @@
+target/
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# Build artifacts
+*.swp
+*.swo
+*~
+
+# Documentation (not needed in image)
+README.md
+CLAUDE.md
+LICENSE
+merlionclaw-roadmap.jsx
+
+# Task files
+tasks/
+
+# Test files
+tests/
+
+# Local config overrides
+*.local.toml
+.env
+.env.*
