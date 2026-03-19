@@ -5,10 +5,11 @@ use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::GatewayConfig;
 use crate::protocol::{InboundMessage, OutboundMessage};
@@ -82,6 +83,8 @@ pub async fn start_with_handler(
         .route("/health", get(health_handler))
         .route("/webhook/alertmanager", post(alertmanager_webhook))
         .route("/webhook/pagerduty", post(pagerduty_webhook))
+        .route("/webhook/whatsapp", get(whatsapp_verify))
+        .route("/webhook/whatsapp", post(whatsapp_webhook))
         .with_state(state);
 
     let addr = SocketAddr::from((config.host, config.port));
@@ -247,6 +250,79 @@ async fn pagerduty_webhook(
     }
 
     axum::Json(serde_json::json!({"status": "ok", "alerts_received": alerts.len()}))
+}
+
+/// WhatsApp webhook verification (GET).
+/// Meta sends a GET request with hub.mode, hub.verify_token, hub.challenge.
+async fn whatsapp_verify(
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let mode = params.get("hub.mode").map(|s| s.as_str());
+    let challenge = params.get("hub.challenge").cloned().unwrap_or_default();
+
+    if mode == Some("subscribe") {
+        // Return the challenge to verify the webhook
+        debug!("WhatsApp webhook verified");
+        (axum::http::StatusCode::OK, challenge)
+    } else {
+        (axum::http::StatusCode::FORBIDDEN, "invalid".to_string())
+    }
+}
+
+/// WhatsApp incoming message webhook (POST).
+async fn whatsapp_webhook(
+    State(state): State<AppState>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    // Parse incoming WhatsApp messages
+    let messages = parse_whatsapp_messages(&payload);
+    debug!(count = messages.len(), "received WhatsApp webhook");
+
+    if let Some(handler) = &state.handler {
+        for (phone, text) in &messages {
+            let session_id = format!("whatsapp:{phone}");
+            handler
+                .handle(session_id, phone.clone(), text.clone(), vec![])
+                .await;
+        }
+    }
+
+    axum::Json(serde_json::json!({"status": "ok"}))
+}
+
+/// Parse WhatsApp Cloud API webhook payload.
+fn parse_whatsapp_messages(payload: &serde_json::Value) -> Vec<(String, String)> {
+    let mut messages = Vec::new();
+
+    let entries = match payload["entry"].as_array() {
+        Some(e) => e,
+        None => return messages,
+    };
+
+    for entry in entries {
+        let changes = match entry["changes"].as_array() {
+            Some(c) => c,
+            None => continue,
+        };
+        for change in changes {
+            let msgs = match change["value"]["messages"].as_array() {
+                Some(m) => m,
+                None => continue,
+            };
+            for msg in msgs {
+                if msg["type"].as_str() != Some("text") {
+                    continue;
+                }
+                let from = msg["from"].as_str().unwrap_or("").to_string();
+                let text = msg["text"]["body"].as_str().unwrap_or("").to_string();
+                if !from.is_empty() && !text.is_empty() {
+                    messages.push((from, text));
+                }
+            }
+        }
+    }
+
+    messages
 }
 
 /// Health check endpoint.

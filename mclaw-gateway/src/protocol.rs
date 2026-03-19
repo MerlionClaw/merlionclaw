@@ -61,6 +61,7 @@ pub enum ChannelKind {
     Telegram,
     Slack,
     Discord,
+    Whatsapp,
     Cli,
     Webchat,
 }
@@ -71,6 +72,7 @@ impl std::fmt::Display for ChannelKind {
             Self::Telegram => write!(f, "telegram"),
             Self::Slack => write!(f, "slack"),
             Self::Discord => write!(f, "discord"),
+            Self::Whatsapp => write!(f, "whatsapp"),
             Self::Cli => write!(f, "cli"),
             Self::Webchat => write!(f, "webchat"),
         }

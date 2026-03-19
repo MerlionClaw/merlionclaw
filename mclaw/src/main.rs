@@ -92,6 +92,30 @@ struct ChannelsConfig {
     slack: SlackChannelConfig,
     #[serde(default)]
     discord: DiscordChannelConfig,
+    #[serde(default)]
+    whatsapp: WhatsAppChannelConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct WhatsAppChannelConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_whatsapp_token_env")]
+    access_token_env: String,
+    #[serde(default)]
+    phone_number_id: String,
+    #[serde(default = "default_whatsapp_verify_token")]
+    verify_token: String,
+    #[serde(default)]
+    allow_from: Vec<String>,
+}
+
+fn default_whatsapp_token_env() -> String {
+    "WHATSAPP_ACCESS_TOKEN".to_string()
+}
+
+fn default_whatsapp_verify_token() -> String {
+    "merlionclaw_verify".to_string()
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -437,6 +461,41 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
+            // Start WhatsApp adapter if enabled
+            let whatsapp_handle = if config.channels.whatsapp.enabled {
+                let access_token =
+                    std::env::var(&config.channels.whatsapp.access_token_env).map_err(|_| {
+                        anyhow::anyhow!("{} not set", config.channels.whatsapp.access_token_env)
+                    })?;
+
+                let wa_config = mclaw_channels::whatsapp::WhatsAppConfig {
+                    access_token,
+                    phone_number_id: config.channels.whatsapp.phone_number_id.clone(),
+                    verify_token: config.channels.whatsapp.verify_token.clone(),
+                    allow_from: config.channels.whatsapp.allow_from.clone(),
+                };
+
+                let adapter = mclaw_channels::whatsapp::WhatsAppAdapter::new(wa_config);
+                let gateway_url =
+                    format!("ws://{}:{}", config.gateway.host, config.gateway.port);
+                let shutdown_clone = shutdown.clone();
+
+                Some(tokio::spawn(async move {
+                    if let Err(e) = mclaw_channels::traits::ChannelAdapter::start(
+                        &adapter,
+                        gateway_url,
+                        shutdown_clone,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %e, "WhatsApp adapter error");
+                    }
+                }))
+            } else {
+                info!("WhatsApp adapter disabled");
+                None
+            };
+
             // Start Discord adapter if enabled
             let discord_handle = if config.channels.discord.enabled {
                 let bot_token = std::env::var(&config.channels.discord.bot_token_env).map_err(
@@ -493,6 +552,9 @@ async fn main() -> anyhow::Result<()> {
                 handle.abort();
             }
             if let Some(handle) = discord_handle {
+                handle.abort();
+            }
+            if let Some(handle) = whatsapp_handle {
                 handle.abort();
             }
         }
