@@ -203,6 +203,22 @@ impl SkillRegistry {
             .join("\n\n")
     }
 
+    /// Get structured info about all registered skills: (name, description, version, tool_count).
+    pub fn skill_info(&self) -> Vec<(String, String, String, usize)> {
+        self.skills
+            .values()
+            .map(|s| {
+                let m = &s.parsed.manifest;
+                (
+                    m.name.clone(),
+                    m.description.clone(),
+                    m.version.clone(),
+                    m.tools.len(),
+                )
+            })
+            .collect()
+    }
+
     /// Get a human-readable summary of all registered skills.
     pub fn skills_summary(&self) -> String {
         if self.skills.is_empty() {

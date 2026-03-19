@@ -1,6 +1,8 @@
+mod tui;
+
 use std::sync::Arc;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use tracing::info;
 
 #[derive(Parser)]
@@ -34,6 +36,41 @@ enum Commands {
     Status,
     /// Check config and connectivity
     Doctor,
+    /// Launch terminal UI dashboard
+    Tui,
+    /// Generate shell completions
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+    /// List all discovered skills and their tools
+    Skills,
+    /// Manage the memory store (search, list, add facts)
+    Memory {
+        #[command(subcommand)]
+        action: MemoryCommands,
+    },
+    /// List configured channels and their status
+    Channels,
+    /// Show log configuration info
+    Logs,
+}
+
+#[derive(Subcommand)]
+enum MemoryCommands {
+    /// Search memory using full-text search
+    Search {
+        /// The search query
+        query: String,
+    },
+    /// List all stored facts
+    List,
+    /// Add a new fact to long-term memory
+    Add {
+        /// The fact to remember
+        fact: String,
+    },
 }
 
 fn init_tracing(log_level: &str) {
@@ -651,6 +688,87 @@ async fn main() -> anyhow::Result<()> {
         Commands::Doctor => {
             let config = load_config(&cli.config);
             run_doctor(&cli.config, &config).await;
+        }
+        Commands::Tui => {
+            let config = load_config(&cli.config);
+            tui::run(&config)?;
+        }
+        Commands::Completion { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "mclaw",
+                &mut std::io::stdout(),
+            );
+        }
+        Commands::Skills => {
+            let skills_dir = std::path::Path::new("skills");
+            match mclaw_skills::registry::SkillRegistry::discover(skills_dir) {
+                Ok(registry) => {
+                    println!("{}", registry.skills_summary());
+                }
+                Err(e) => {
+                    println!("Failed to discover skills: {e}");
+                }
+            }
+        }
+        Commands::Memory { action } => {
+            let config = load_config(&cli.config);
+            let memory_dir = shellexpand::tilde(&config.memory.dir).to_string();
+            let store = mclaw_memory::store::MemoryStore::new(std::path::PathBuf::from(&memory_dir)).await?;
+            match action {
+                MemoryCommands::Search { query } => {
+                    let hits = store.search(&query, 10).await?;
+                    if hits.is_empty() {
+                        println!("No results found for: {query}");
+                    } else {
+                        println!("Search results for \"{query}\":");
+                        for hit in &hits {
+                            let source = match &hit.source {
+                                mclaw_memory::search::MemorySource::Fact => "fact".to_string(),
+                                mclaw_memory::search::MemorySource::Diary(d) => format!("diary:{d}"),
+                                mclaw_memory::search::MemorySource::Context(s) => format!("ctx:{s}"),
+                            };
+                            println!("  [{:.2}] [{}] {}", hit.score, source, hit.content);
+                        }
+                    }
+                }
+                MemoryCommands::List => {
+                    let facts = store.get_facts().await?;
+                    if facts.is_empty() {
+                        println!("No facts stored.");
+                    } else {
+                        println!("Stored facts ({}):", facts.len());
+                        for fact in &facts {
+                            println!("  - {fact}");
+                        }
+                    }
+                }
+                MemoryCommands::Add { fact } => {
+                    store.add_fact(&fact).await?;
+                    println!("Fact added: {fact}");
+                }
+            }
+        }
+        Commands::Channels => {
+            let config = load_config(&cli.config);
+            println!("Configured channels:");
+            println!("  Telegram: {}", if config.channels.telegram.enabled { "enabled" } else { "disabled" });
+            println!("  Slack: {}", if config.channels.slack.enabled { "enabled" } else { "disabled" });
+            println!("  Discord: {}", if config.channels.discord.enabled { "enabled" } else { "disabled" });
+            println!("  WhatsApp: {}", if config.channels.whatsapp.enabled { "enabled" } else { "disabled" });
+            println!("  Teams: {}", if config.channels.teams.enabled { "enabled" } else { "disabled" });
+        }
+        Commands::Logs => {
+            println!("MerlionClaw logs are emitted to stderr via the tracing framework.");
+            println!();
+            println!("To control log output, set the MCLAW_LOG environment variable:");
+            println!("  MCLAW_LOG=debug mclaw run    # verbose logging");
+            println!("  MCLAW_LOG=warn mclaw run     # warnings and errors only");
+            println!("  MCLAW_LOG=mclaw_agent=debug  # debug a specific crate");
+            println!();
+            println!("You can also use the --log-level flag:");
+            println!("  mclaw --log-level debug run");
         }
     }
 
