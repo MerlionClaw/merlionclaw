@@ -247,6 +247,30 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
+            // Register Helm skill handler if available
+            match mclaw_skills::helm::HelmSkill::new().await {
+                Ok(helm) => {
+                    registry.register_handler("helm", Box::new(helm));
+                    info!("Helm skill handler registered");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Helm skill not available");
+                }
+            }
+
+            // Register Istio skill handler if K8s is available
+            match mclaw_skills::istio::IstioSkill::new().await {
+                Ok(istio) => {
+                    registry.register_handler("istio", Box::new(istio));
+                    info!("Istio skill handler registered");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Istio skill not available");
+                }
+            }
+
+            // Note: Loki skill requires config (loki_url) — registered when config is present
+
             // Initialize memory store
             let memory_dir = shellexpand::tilde(&config.memory.dir).to_string();
             let memory_store = std::sync::Arc::new(

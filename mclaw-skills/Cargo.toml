@@ -23,5 +23,6 @@ async-trait = "0.1"
 tokio.workspace = true
 indexmap = { version = "2", features = ["serde"] }
 chrono.workspace = true
+reqwest.workspace = true
 kube = { version = "0.98", features = ["client", "runtime"], optional = true }
 k8s-openapi = { version = "0.24", features = ["v1_32"], optional = true }

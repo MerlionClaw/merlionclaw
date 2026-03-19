@@ -8,4 +8,9 @@ pub mod registry;
 
 #[cfg(feature = "k8s")]
 pub mod k8s;
+#[cfg(feature = "k8s")]
+pub mod istio;
+
+pub mod helm;
+pub mod loki;
 pub mod memory;
