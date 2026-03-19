@@ -47,6 +47,56 @@ fn init_tracing(log_level: &str) {
         .init();
 }
 
+/// App config loaded from TOML.
+#[derive(Debug, Default, serde::Deserialize)]
+struct AppConfig {
+    #[serde(default)]
+    gateway: mclaw_gateway::config::GatewayConfig,
+    #[serde(default)]
+    channels: ChannelsConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ChannelsConfig {
+    #[serde(default)]
+    telegram: TelegramChannelConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct TelegramChannelConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_telegram_token_env")]
+    bot_token_env: String,
+    #[serde(default)]
+    allow_from: Vec<String>,
+}
+
+fn default_telegram_token_env() -> String {
+    "TELEGRAM_BOT_TOKEN".to_string()
+}
+
+
+fn load_config(path: &str) -> AppConfig {
+    let expanded = shellexpand::tilde(path).to_string();
+    match std::fs::read_to_string(&expanded) {
+        Ok(content) => match toml::from_str(&content) {
+            Ok(config) => {
+                info!(path = %expanded, "config loaded");
+                config
+            }
+            Err(e) => {
+                tracing::warn!(path = %expanded, error = %e, "invalid config, using defaults");
+                AppConfig::default()
+            }
+        },
+        Err(_) => {
+            tracing::warn!(path = %expanded, "config not found, using defaults");
+            AppConfig::default()
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -59,10 +109,71 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 info!("starting gateway and agent");
             }
-            info!(config = %cli.config, "loading config");
 
-            let gateway_config = mclaw_gateway::config::GatewayConfig::default();
-            mclaw_gateway::server::start(gateway_config).await?;
+            let config = load_config(&cli.config);
+            let shutdown = tokio_util::sync::CancellationToken::new();
+
+            // Start gateway
+            let gateway_config = config.gateway.clone();
+            let gateway_handle = tokio::spawn(async move {
+                if let Err(e) = mclaw_gateway::server::start(gateway_config).await {
+                    tracing::error!(error = %e, "gateway error");
+                }
+            });
+
+            // Give gateway a moment to bind
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            // Start Telegram adapter if enabled
+            let telegram_handle = if config.channels.telegram.enabled {
+                let bot_token = std::env::var(&config.channels.telegram.bot_token_env)
+                    .map_err(|_| anyhow::anyhow!("{} not set", config.channels.telegram.bot_token_env))?;
+
+                let telegram_config = mclaw_channels::telegram::TelegramConfig {
+                    bot_token,
+                    allow_from: config.channels.telegram.allow_from.clone(),
+                };
+
+                let adapter = mclaw_channels::telegram::TelegramAdapter::new(telegram_config);
+                let gateway_url = format!("ws://{}:{}", config.gateway.host, config.gateway.port);
+                let shutdown_clone = shutdown.clone();
+
+                Some(tokio::spawn(async move {
+                    if let Err(e) = mclaw_channels::traits::ChannelAdapter::start(
+                        &adapter,
+                        gateway_url,
+                        shutdown_clone,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %e, "Telegram adapter error");
+                    }
+                }))
+            } else {
+                info!("Telegram adapter disabled");
+                None
+            };
+
+            // Wait for shutdown signal
+            let shutdown_clone = shutdown.clone();
+            tokio::spawn(async move {
+                tokio::signal::ctrl_c().await.ok();
+                info!("received shutdown signal");
+                shutdown_clone.cancel();
+            });
+
+            // Wait for gateway (runs forever until abort)
+            tokio::select! {
+                _ = gateway_handle => {}
+                _ = shutdown.cancelled() => {
+                    info!("shutting down");
+                }
+            }
+
+            // Clean up telegram handle if it exists
+            if let Some(handle) = telegram_handle {
+                handle.abort();
+            }
         }
         Commands::Onboard => {
             info!("starting onboard wizard");

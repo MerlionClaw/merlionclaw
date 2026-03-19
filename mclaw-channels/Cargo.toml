@@ -5,8 +5,21 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["telegram"]
+telegram = ["teloxide"]
+
 [dependencies]
+mclaw-gateway = { path = "../mclaw-gateway" }
 tokio.workspace = true
+tokio-tungstenite.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+anyhow.workspace = true
+async-trait = "0.1"
+futures-core.workspace = true
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["rt"] }
+teloxide = { version = "0.13", features = ["macros"], optional = true }
