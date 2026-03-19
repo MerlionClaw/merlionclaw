@@ -22,33 +22,40 @@ tools:
     parameters:
       release:
         type: string
+        description: "Name of the Helm release to check status for"
         required: true
       namespace:
         type: string
+        description: Kubernetes namespace of the release
         default: default
   - name: helm_history
     description: Show revision history of a Helm release
     parameters:
       release:
         type: string
+        description: Name of the Helm release
         required: true
       namespace:
         type: string
+        description: Kubernetes namespace of the release
         default: default
   - name: helm_values
     description: Get current values for a Helm release
     parameters:
       release:
         type: string
+        description: Name of the Helm release
         required: true
       namespace:
         type: string
+        description: Kubernetes namespace of the release
         default: default
   - name: helm_upgrade
     description: Upgrade a Helm release with new values
     parameters:
       release:
         type: string
+        description: Name of the Helm release to upgrade
         required: true
       chart:
         type: string
@@ -56,6 +63,7 @@ tools:
         required: true
       namespace:
         type: string
+        description: Kubernetes namespace of the release
         default: default
       set:
         type: array
@@ -66,6 +74,7 @@ tools:
     parameters:
       release:
         type: string
+        description: Name of the Helm release to rollback
         required: true
       revision:
         type: integer
@@ -73,15 +82,18 @@ tools:
         required: false
       namespace:
         type: string
+        description: Kubernetes namespace of the release
         default: default
   - name: helm_uninstall
     description: Uninstall a Helm release
     parameters:
       release:
         type: string
+        description: Name of the Helm release to uninstall
         required: true
       namespace:
         type: string
+        description: Kubernetes namespace of the release
         default: default
 ---
 

@@ -251,10 +251,16 @@ async fn main() -> anyhow::Result<()> {
 
             let config = load_config(&cli.config);
 
-            // Create LLM provider
-            let provider = mclaw_agent::llm::anthropic::AnthropicProvider::from_env(
+            // Create LLM provider (optional — gateway runs without it)
+            let provider = match mclaw_agent::llm::anthropic::AnthropicProvider::from_env(
                 &config.agent.providers.anthropic.api_key_env,
-            )?;
+            ) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    tracing::warn!(error = %e, "LLM provider not available — chat will be disabled");
+                    None
+                }
+            };
 
             // Discover skills
             let skills_dir = std::path::Path::new("skills");
@@ -309,15 +315,19 @@ async fn main() -> anyhow::Result<()> {
             registry.register_handler("memory", Box::new(memory_skill));
             info!(dir = %memory_dir, "memory system initialized");
 
-            // Create agent
-            let agent = mclaw_agent::agent::Agent::new(
-                Box::new(provider),
-                config.agent.default_model.clone(),
-            )
-            .with_dispatcher(Box::new(registry));
-
-            let handler: Arc<dyn mclaw_gateway::server::MessageHandler> =
-                Arc::new(AgentHandler { agent });
+            // Create agent (only if LLM provider is available)
+            let handler: Option<Arc<dyn mclaw_gateway::server::MessageHandler>> =
+                if let Some(provider) = provider {
+                    let agent = mclaw_agent::agent::Agent::new(
+                        Box::new(provider),
+                        config.agent.default_model.clone(),
+                    )
+                    .with_dispatcher(Box::new(registry));
+                    Some(Arc::new(AgentHandler { agent }))
+                } else {
+                    info!("agent disabled (no LLM provider)");
+                    None
+                };
 
             let shutdown = tokio_util::sync::CancellationToken::new();
 
@@ -326,7 +336,7 @@ async fn main() -> anyhow::Result<()> {
             let handler_clone = handler.clone();
             let gateway_handle = tokio::spawn(async move {
                 if let Err(e) =
-                    mclaw_gateway::server::start_with_handler(gateway_config, Some(handler_clone))
+                    mclaw_gateway::server::start_with_handler(gateway_config, handler_clone)
                         .await
                 {
                     tracing::error!(error = %e, "gateway error");

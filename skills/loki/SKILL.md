@@ -21,6 +21,7 @@ tools:
     parameters:
       query:
         type: string
+        description: "LogQL query to execute over the time range"
         required: true
       start:
         type: string
@@ -32,6 +33,7 @@ tools:
         required: false
       limit:
         type: integer
+        description: Max number of log lines to return
         default: 100
   - name: loki_labels
     description: List available log stream label names
@@ -41,6 +43,7 @@ tools:
     parameters:
       label:
         type: string
+        description: Label name to list values for
         required: true
   - name: loki_tail
     description: Get the most recent log lines for a stream selector
@@ -51,6 +54,7 @@ tools:
         required: true
       lines:
         type: integer
+        description: Number of recent log lines to return
         default: 20
 ---
 
