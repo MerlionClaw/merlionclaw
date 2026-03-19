@@ -28,6 +28,8 @@ pub struct SkillRegistry {
     skills: HashMap<String, RegisteredSkill>,
     /// Maps tool_name → skill_name for dispatch.
     tool_index: HashMap<String, String>,
+    /// Optional permission engine.
+    permission_engine: Option<mclaw_permissions::PermissionEngine>,
 }
 
 impl SkillRegistry {
@@ -36,6 +38,7 @@ impl SkillRegistry {
         Self {
             skills: HashMap::new(),
             tool_index: HashMap::new(),
+            permission_engine: None,
         }
     }
 
@@ -99,6 +102,11 @@ impl SkillRegistry {
         Ok(registry)
     }
 
+    /// Set the permission engine for access control.
+    pub fn set_permission_engine(&mut self, engine: mclaw_permissions::PermissionEngine) {
+        self.permission_engine = Some(engine);
+    }
+
     /// Register a handler for a named skill (replaces the no-op default).
     pub fn register_handler(&mut self, skill_name: &str, handler: Box<dyn SkillHandler>) {
         if let Some(skill) = self.skills.get_mut(skill_name) {
@@ -145,6 +153,42 @@ impl SkillRegistry {
             .skills
             .get(skill_name)
             .ok_or_else(|| anyhow::anyhow!("skill not found: {skill_name}"))?;
+
+        // Check permissions if engine is set
+        if let Some(engine) = &self.permission_engine {
+            let required_caps: Vec<mclaw_permissions::Capability> = skill
+                .parsed
+                .manifest
+                .permissions
+                .iter()
+                .filter_map(|s| mclaw_permissions::Capability::new(s).ok())
+                .collect();
+
+            if !required_caps.is_empty() {
+                match engine.check(skill_name, &required_caps) {
+                    mclaw_permissions::PermissionDecision::Allowed => {}
+                    mclaw_permissions::PermissionDecision::RequiresApproval {
+                        capability,
+                        ..
+                    } => {
+                        // For now, allow with a warning (full approval flow requires channel interaction)
+                        tracing::warn!(
+                            skill = skill_name,
+                            capability = %capability,
+                            "proceeding without approval (approval flow not yet implemented)"
+                        );
+                    }
+                    mclaw_permissions::PermissionDecision::Denied {
+                        capability,
+                        reason,
+                    } => {
+                        return Err(anyhow::anyhow!(
+                            "Permission denied: {tool_name} requires '{capability}' — {reason}"
+                        ));
+                    }
+                }
+            }
+        }
 
         skill.handler.execute(tool_name, input).await
     }

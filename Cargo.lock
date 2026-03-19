@@ -1837,6 +1837,7 @@ dependencies = [
 name = "mclaw-permissions"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "serde",
  "thiserror 2.0.18",
  "tracing",
@@ -1854,6 +1855,7 @@ dependencies = [
  "kube",
  "mclaw-agent",
  "mclaw-memory",
+ "mclaw-permissions",
  "serde",
  "serde_json",
  "serde_yaml",

@@ -12,6 +12,7 @@ k8s = ["kube", "k8s-openapi"]
 [dependencies]
 mclaw-agent = { path = "../mclaw-agent" }
 mclaw-memory = { path = "../mclaw-memory" }
+mclaw-permissions = { path = "../mclaw-permissions" }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
